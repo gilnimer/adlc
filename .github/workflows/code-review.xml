@@ -1,0 +1,44 @@
+<process name="code-review" type="workflow">
+  <trigger type="manual" />
+
+  <globals>
+    <var name="file_path" required="true" />
+  </globals>
+
+  <steps>
+    <step id="analyze" agent="qa">
+      <input format="text">
+        Review the file at ${{file_path}} for code quality issues.
+        Check for bugs, security issues, and style violations.
+      </input>
+      <output save_as="analysis" />
+      <routing>
+        <on-status value="approve" goto="summarize" />
+        <on-status value="reject" goto="suggest-fixes" />
+        <on-error goto="analyze" retry_count="2" />
+        <on-max-retries goto="summarize" />
+      </routing>
+    </step>
+
+    <step id="suggest-fixes" agent="developer">
+      <input format="text">
+        The following issues were found in ${{file_path}}:
+        ${{analysis}}
+        Suggest specific fixes for each issue.
+      </input>
+      <output save_as="fixes" />
+      <routing>
+        <on-status value="success" goto="summarize" />
+        <on-error goto="summarize" retry_count="1" />
+      </routing>
+    </step>
+
+    <step id="summarize" agent="principal">
+      <input format="text">
+        Summarize the review of ${{file_path}}.
+        Analysis: ${{analysis}}
+      </input>
+      <output save_as="summary" />
+    </step>
+  </steps>
+</process>

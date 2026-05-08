@@ -1,0 +1,89 @@
+<process name="feature-development" type="workflow">
+  <trigger type="manual" />
+
+  <globals>
+    <var name="ticket_id" required="true" />
+    <var name="requirements" required="false" />
+  </globals>
+
+  <steps>
+    <!-- Step 1: Principal plans the implementation -->
+    <step id="plan" agent="principal">
+      <input format="text">
+        Analyze ticket ${{ticket_id}} and create an implementation plan.
+        Requirements: ${{requirements}}
+      </input>
+      <output save_as="implementation_plan" />
+      <routing>
+        <on-status value="success" goto="implement" />
+        <on-status value="fail" goto="plan" pass_feedback="true" />
+        <on-error goto="plan" retry_count="2" />
+        <on-max-retries goto="escalate" />
+      </routing>
+    </step>
+
+    <!-- Step 2: Developer implements the plan -->
+    <step id="implement" agent="developer">
+      <input format="text">
+        Implement the following plan for ticket ${{ticket_id}}:
+        ${{implementation_plan}}
+      </input>
+      <output save_as="implemented_code" />
+      <routing>
+        <on-status value="success" goto="review" />
+        <on-status value="fail" goto="implement" pass_feedback="true" />
+        <on-error goto="implement" retry_count="3" />
+        <on-max-retries goto="escalate" />
+      </routing>
+    </step>
+
+    <!-- Step 3: QA reviews the code -->
+    <step id="review" agent="qa">
+      <input format="text">
+        Review the implemented code for ticket ${{ticket_id}}:
+        ${{implemented_code}}
+      </input>
+      <output save_as="review_result" />
+      <routing>
+        <on-status value="approve" goto="security-check" />
+        <on-status value="reject" goto="implement" pass_feedback="true" />
+        <on-error goto="escalate" retry_count="1" />
+        <on-max-retries goto="escalate" />
+      </routing>
+    </step>
+
+    <!-- Step 4: Security audit sub-flow -->
+    <step id="security-check" type="subflow" src="modules/security-audit.xml">
+      <input map_to="code_to_audit">${{implemented_code}}</input>
+      <output save_as="audit_report" />
+      <routing>
+        <on-status value="success" goto="finalize" />
+        <on-status value="fail" goto="implement" pass_feedback="true" />
+      </routing>
+    </step>
+
+    <!-- Step 5: Finalize -->
+    <step id="finalize" agent="principal">
+      <input format="text">
+        Finalize delivery for ticket ${{ticket_id}}.
+        Code: ${{implemented_code}}
+        Review: ${{review_result}}
+        Audit: ${{audit_report}}
+      </input>
+      <output save_as="delivery_summary" />
+    </step>
+
+    <!-- Escalation handler -->
+    <step id="escalate" agent="principal">
+      <input format="text">
+        Escalation required for ticket ${{ticket_id}}.
+        This task requires human intervention.
+      </input>
+      <output save_as="escalation_report" />
+    </step>
+  </steps>
+
+  <post-process>
+    <evaluate agent="meta-qa" prompt="prompts/grade.md" />
+  </post-process>
+</process>

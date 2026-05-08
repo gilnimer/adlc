@@ -1,0 +1,16 @@
+{
+  "name": "@aoml/agent",
+  "version": "0.0.1",
+  "description": "AOML Cloud Agent executor — triggers GitHub Copilot cloud agent sessions for each AOML step",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aoml/core": "workspace:*",
+    "@octokit/rest": "^21.0.0"
+  }
+}

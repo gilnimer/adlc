@@ -1,0 +1,53 @@
+{
+  "name": "aoml-copilot",
+  "displayName": "AOML Orchestration Engine",
+  "version": "0.0.1",
+  "description": "Run AOML multi-agent workflows natively in Copilot Chat",
+  "publisher": "aoml",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "aoml.orchestrator",
+        "name": "aoml",
+        "fullName": "AOML Engine",
+        "description": "Run multi-agent workflows defined in AOML XML",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "run",
+            "description": "Run an AOML workflow"
+          },
+          {
+            "name": "dry-run",
+            "description": "Validate and preview a workflow without executing"
+          },
+          {
+            "name": "list",
+            "description": "List available workflows in this workspace"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
+    "package": "vsce package --no-dependencies",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aoml/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.93.0",
+    "esbuild": "^0.28.0"
+  }
+}

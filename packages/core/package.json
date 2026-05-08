@@ -1,0 +1,32 @@
+{
+  "name": "@aoml/core",
+  "version": "0.0.1",
+  "description": "AOML Engine core - parser, state machine, and adapter layer",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "gray-matter": "^4.0.3",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "@github/copilot-sdk": "^0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@github/copilot-sdk": {
+      "optional": true
+    }
+  }
+}
