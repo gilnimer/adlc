@@ -216,45 +216,80 @@ async function pollForCompletion(options: PollOptions): Promise<SessionInfo> {
   };
 
   while (Date.now() < deadline) {
-    // Check for linked PRs via timeline events
-    const { data: events } = await octokit.issues.listEventsForTimeline({
-      owner,
-      repo,
-      issue_number: issueNumber,
-    });
+    // Strategy 1: Check timeline for cross-referenced or connected events
+    if (!session.prNumber) {
+      const { data: events } = await octokit.issues.listEventsForTimeline({
+        owner,
+        repo,
+        issue_number: issueNumber,
+      });
 
-    // Look for a cross-referenced PR from the bot
-    for (const event of events) {
-      if (
-        event.event === 'cross-referenced' &&
-        'source' in event &&
-        (event as any).source?.issue?.pull_request
-      ) {
-        const linkedPR = (event as any).source.issue;
-        session.prNumber = linkedPR.number;
-        session.prUrl = linkedPR.html_url;
-        session.status = 'working';
+      for (const event of events) {
+        // cross-referenced: contains the PR directly
+        if (
+          event.event === 'cross-referenced' &&
+          'source' in event &&
+          (event as any).source?.issue?.pull_request
+        ) {
+          const linkedPR = (event as any).source.issue;
+          session.prNumber = linkedPR.number;
+          session.prUrl = linkedPR.html_url;
+          session.status = 'working';
+          break;
+        }
+      }
 
-        // Check if the PR has been marked ready for review (agent is done)
-        const { data: pr } = await octokit.pulls.get({
+      // Strategy 2: If a "connected" event exists (Copilot agent links PRs this way)
+      // but doesn't embed the PR number, search for open PRs referencing this issue
+      const hasConnected = events.some((e) => e.event === 'connected');
+      if (!session.prNumber && hasConnected) {
+        const { data: prs } = await octokit.pulls.list({
           owner,
           repo,
-          pull_number: linkedPR.number,
+          state: 'open',
+          sort: 'created',
+          direction: 'desc',
+          per_page: 10,
         });
 
-        session.prBranch = pr.head.ref;
+        // Find the PR whose body mentions this issue or was created by the bot
+        for (const pr of prs) {
+          const mentionsIssue =
+            pr.body?.includes(`#${issueNumber}`) ||
+            pr.body?.includes(`issues/${issueNumber}`);
+          const byBot = pr.user?.type === 'Bot';
 
-        // The agent requests review when it's done
-        if (pr.requested_reviewers && pr.requested_reviewers.length > 0) {
-          session.status = 'completed';
-          return session;
+          if (mentionsIssue || byBot) {
+            session.prNumber = pr.number;
+            session.prUrl = pr.html_url;
+            session.prBranch = pr.head.ref;
+            session.status = 'working';
+            break;
+          }
         }
+      }
+    }
 
-        // Also check if PR is merged or closed
-        if (pr.state === 'closed' || pr.merged) {
-          session.status = 'completed';
-          return session;
-        }
+    // If we found a PR, check if the agent is done
+    if (session.prNumber) {
+      const { data: pr } = await octokit.pulls.get({
+        owner,
+        repo,
+        pull_number: session.prNumber,
+      });
+
+      session.prBranch = pr.head.ref;
+
+      // The agent requests review when it's done
+      if (pr.requested_reviewers && pr.requested_reviewers.length > 0) {
+        session.status = 'completed';
+        return session;
+      }
+
+      // Also check if PR is merged or closed
+      if (pr.state === 'closed' || pr.merged) {
+        session.status = 'completed';
+        return session;
       }
     }
 

@@ -11,12 +11,15 @@ function createMockOctokit(overrides?: {
   prBody?: string;
   files?: Array<{ status: string; filename: string; additions: number; deletions: number }>;
   closedWithoutPR?: boolean;
+  /** Simulate Copilot agent linking via "connected" event instead of cross-referenced */
+  useConnectedEvent?: boolean;
 }) {
   const opts = {
     prReady: true,
     prBody: 'Implemented the feature',
     files: [{ status: 'modified', filename: 'src/auth.ts', additions: 10, deletions: 2 }],
     closedWithoutPR: false,
+    useConnectedEvent: false,
     ...overrides,
   };
 
@@ -38,12 +41,17 @@ function createMockOctokit(overrides?: {
       })),
       listEventsForTimeline: vi.fn().mockImplementation(() => {
         pollCount++;
-        // Simulate: first poll has no PR, second poll has cross-reference
+        // Simulate: first poll has no PR, second poll has the link event
         if (pollCount <= 1 && !opts.closedWithoutPR) {
           return { data: [] };
         }
         if (opts.closedWithoutPR) {
           return { data: [] };
+        }
+        if (opts.useConnectedEvent) {
+          return {
+            data: [{ event: 'connected' }],
+          };
         }
         return {
           data: [
@@ -71,6 +79,17 @@ function createMockOctokit(overrides?: {
           merged: false,
           requested_reviewers: opts.prReady ? [{ login: 'test-user' }] : [],
         },
+      }),
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            number: 100,
+            html_url: 'https://github.com/test-owner/test-repo/pull/100',
+            head: { ref: 'copilot/step-auth' },
+            body: 'Fixes #42',
+            user: { type: 'Bot' },
+          },
+        ],
       }),
       listFiles: vi.fn().mockResolvedValue({
         data: opts.files,
@@ -211,5 +230,23 @@ describe('CloudAgentExecutor', () => {
     expect(createCall.body).toContain('src/auth.ts');
     expect(createCall.body).toContain('priority');
     expect(createCall.body).toContain('high');
+  });
+
+  it('finds PR via connected event + pulls.list fallback', async () => {
+    const octokit = createMockOctokit({ useConnectedEvent: true });
+
+    const executor = createCloudAgentExecutor({
+      octokit: octokit as any,
+      owner: 'test-owner',
+      repo: 'test-repo',
+      pollIntervalMs: 10,
+    });
+
+    const result = await executor(makeStep(), 'Implement auth', new Map());
+
+    // Should have used pulls.list to find the PR
+    expect(octokit.pulls.list).toHaveBeenCalled();
+    expect(result.status).toBe('success');
+    expect(result.extractedData).toContain('PR #100');
   });
 });
