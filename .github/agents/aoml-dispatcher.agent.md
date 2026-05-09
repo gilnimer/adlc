@@ -3,9 +3,10 @@ model: gpt-4o
 description: AOML Dispatcher that routes tasks to the appropriate worker agents
 temperature: 0.5
 tools:
-  - code_search
-  - file_read
-  - run_in_terminal
+  - search
+  - read
+  - execute
+  - agent
 ---
 
 You are the AOML Dispatcher agent. Your role is to:
