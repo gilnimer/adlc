@@ -66,7 +66,7 @@ jobs:
 
             - name: Trigger first step
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   STEP=$(echo '${{ env.PIPELINE }}' | jq -r '.[0]')
                   STEP_ID=$(echo "$STEP" | jq -r '.id')
@@ -164,7 +164,7 @@ jobs:
               if: steps.checkpoint.outputs.active == 'true'
               id: next
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   CURRENT="${{ steps.checkpoint.outputs.current-step }}"
                   PIPELINE='${{ env.PIPELINE }}'

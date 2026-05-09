@@ -34,7 +34,7 @@ jobs:
 
             - name: Run startStep (event-driven)
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   node -e "
                     import { startStep } from './packages/action/dist/index.js';

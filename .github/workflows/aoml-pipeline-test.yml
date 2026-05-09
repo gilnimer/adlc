@@ -35,7 +35,7 @@ jobs:
             - name: Trigger developer agent
               id: trigger
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   node packages/agent/dist/pipeline-cli.js trigger \
                     --step "develop" \

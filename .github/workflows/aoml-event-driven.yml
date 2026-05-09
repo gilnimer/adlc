@@ -45,7 +45,7 @@ jobs:
               id: start
               uses: ./packages/action
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               with:
                   workflow-file: ${{ github.event.inputs.workflow-file }}
                   execution-mode: event-driven
@@ -79,7 +79,7 @@ jobs:
               id: continue
               uses: ./packages/action
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               with:
                   execution-mode: event-driven-continue
                   pr-number: ${{ github.event.pull_request.number }}
