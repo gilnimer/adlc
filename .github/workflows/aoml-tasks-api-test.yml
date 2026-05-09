@@ -35,7 +35,7 @@ jobs:
             - name: Start agent task
               id: start
               env:
-                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   node packages/agent/dist/pipeline-cli.js task start \
                     --prompt "Create a README.md for an AOML Tasks API test. Include a brief description and a note that this was created via the Agent Tasks API." \
@@ -48,7 +48,7 @@ jobs:
             - name: Wait for task completion
               id: wait
               env:
-                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   TASK_ID=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/task-start-output.json','utf8')).id)")
                   echo "Task ID: $TASK_ID"
@@ -64,7 +64,7 @@ jobs:
             - name: Extract PR result
               id: extract
               env:
-                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
               run: |
                   PR_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/task-wait-output.json','utf8')).prNumber))")
                   echo "PR number: $PR_NUMBER"

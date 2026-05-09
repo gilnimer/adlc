@@ -348,14 +348,30 @@ async function cmdTaskWait(args: Record<string, string>): Promise<void> {
     intervalSec,
   });
 
-  // Extract PR number from artifacts if available
-  const prArtifact = task.artifacts.find((a) => a.type === 'pull');
-  const prNumber = prArtifact?.data?.id;
+  // The artifact data.id is the internal PR ID, not the PR number.
+  // Look up the actual PR number using the branch name from either
+  // the session's headRef or the branch artifact.
+  let prNumber: number | null = null;
+  const headRef =
+    task.sessions?.[0]?.headRef ??
+    (task.artifacts.find((a) => a.type === 'branch') as any)?.data?.head_ref;
+  if (headRef) {
+    const { data: prs } = await octokit.pulls.list({
+      owner,
+      repo,
+      head: `${owner}:${headRef}`,
+      state: 'open',
+      per_page: 1,
+    });
+    if (prs.length > 0) {
+      prNumber = prs[0].number;
+    }
+  }
 
   const result = {
     taskId: task.id,
     state: task.state,
-    prNumber: prNumber ?? null,
+    prNumber,
     htmlUrl: task.htmlUrl,
     sessions: task.sessions ?? [],
   };
