@@ -1,5 +1,6 @@
 ---
 model: gpt-4o-mini
+description: AOML Adapter that translates between the engine and worker agents
 temperature: 0.1
 ---
 

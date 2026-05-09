@@ -1,5 +1,6 @@
 ---
 model: gpt-4o
+description: AOML Dispatcher that routes tasks to the appropriate worker agents
 temperature: 0.5
 tools:
   - code_search

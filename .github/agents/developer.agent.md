@@ -1,5 +1,6 @@
 ---
 model: gpt-4o
+description: Senior Software Developer that writes clean, well-tested TypeScript code
 temperature: 0.5
 tools:
   - code_search

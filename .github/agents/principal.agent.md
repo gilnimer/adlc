@@ -1,5 +1,6 @@
 ---
 model: gpt-4o
+description: Principal Engineer that reviews architecture, design decisions, and code quality
 temperature: 0.7
 tools:
   - code_search

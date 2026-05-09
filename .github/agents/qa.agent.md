@@ -1,5 +1,6 @@
 ---
 model: gpt-4o
+description: QA Engineer that validates code quality, tests, and edge cases
 temperature: 0.3
 tools:
   - code_search
