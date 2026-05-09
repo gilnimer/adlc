@@ -276,7 +276,15 @@ export interface AgentTask {
   url: string;
   htmlUrl: string;
   name: string;
-  state: 'queued' | 'in_progress' | 'completed' | 'failed' | 'idle' | 'waiting_for_user' | 'timed_out' | 'cancelled';
+  state:
+    | 'queued'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'idle'
+    | 'waiting_for_user'
+    | 'timed_out'
+    | 'cancelled';
   sessionCount: number;
   artifacts: Array<{ provider: string; type: string; data: { id: number } }>;
   createdAt: string;
@@ -385,7 +393,9 @@ export async function waitForAgentTask(
     }
 
     if (Date.now() - startTime >= timeoutMs) {
-      throw new Error(`Timeout after ${Math.round(timeoutMs / 1000)}s waiting for task ${taskId} (state: ${task.state})`);
+      throw new Error(
+        `Timeout after ${Math.round(timeoutMs / 1000)}s waiting for task ${taskId} (state: ${task.state})`
+      );
     }
 
     console.error(`[${elapsed}s] Task ${taskId} state: ${task.state}...`);

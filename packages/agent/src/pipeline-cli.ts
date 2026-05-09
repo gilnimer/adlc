@@ -16,7 +16,13 @@
  *   node packages/agent/dist/pipeline-cli.js extract \
  *     --pr 12 --owner gilnimer --repo adlc
  */
-import { triggerCloudAgent, extractCloudAgentResult, findLinkedPR, startAgentTask, waitForAgentTask } from './cloud-agent-ops.js';
+import {
+  triggerCloudAgent,
+  extractCloudAgentResult,
+  findLinkedPR,
+  startAgentTask,
+  waitForAgentTask,
+} from './cloud-agent-ops.js';
 import { Octokit } from '@octokit/rest';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
