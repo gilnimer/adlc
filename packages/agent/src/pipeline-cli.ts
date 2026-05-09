@@ -16,7 +16,7 @@
  *   node packages/agent/dist/pipeline-cli.js extract \
  *     --pr 12 --owner gilnimer --repo adlc
  */
-import { triggerCloudAgent, extractCloudAgentResult, findLinkedPR } from './cloud-agent-ops.js';
+import { triggerCloudAgent, extractCloudAgentResult, findLinkedPR, startAgentTask, waitForAgentTask } from './cloud-agent-ops.js';
 import { Octokit } from '@octokit/rest';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -286,6 +286,81 @@ async function cmdFindPR(args: Record<string, string>): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Task commands (Agent Tasks API v2026-03-10)
+// ---------------------------------------------------------------------------
+
+async function cmdTaskStart(args: Record<string, string>): Promise<void> {
+  const prompt = required(args, 'prompt');
+  const owner = required(args, 'owner');
+  const repo = required(args, 'repo');
+  const baseRef = args['base'] ?? 'main';
+  const model = args['model'] ?? '';
+  const createPR = args['create-pr'] !== 'false'; // default true
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    console.error('GITHUB_TOKEN environment variable is required');
+    process.exit(1);
+  }
+
+  const octokit = new Octokit({ auth: token });
+
+  const task = await startAgentTask({
+    octokit,
+    owner,
+    repo,
+    prompt,
+    baseRef,
+    model: model || undefined,
+    createPullRequest: createPR,
+  });
+
+  console.log(JSON.stringify(task, null, 2));
+
+  appendOutput('task-id', task.id);
+  appendOutput('task-state', task.state);
+  appendOutput('task-url', task.htmlUrl);
+}
+
+async function cmdTaskWait(args: Record<string, string>): Promise<void> {
+  const taskId = required(args, 'task-id');
+  const owner = required(args, 'owner');
+  const repo = required(args, 'repo');
+  const timeoutSec = parseInt(args['timeout'] ?? '300', 10);
+  const intervalSec = parseInt(args['interval'] ?? '15', 10);
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    console.error('GITHUB_TOKEN environment variable is required');
+    process.exit(1);
+  }
+
+  const octokit = new Octokit({ auth: token });
+
+  const task = await waitForAgentTask(octokit, owner, repo, taskId, {
+    timeoutSec,
+    intervalSec,
+  });
+
+  // Extract PR number from artifacts if available
+  const prArtifact = task.artifacts.find((a) => a.type === 'pull');
+  const prNumber = prArtifact?.data?.id;
+
+  const result = {
+    taskId: task.id,
+    state: task.state,
+    prNumber: prNumber ?? null,
+    htmlUrl: task.htmlUrl,
+    sessions: task.sessions ?? [],
+  };
+
+  console.log(JSON.stringify(result, null, 2));
+
+  appendOutput('task-state', task.state);
+  if (prNumber) appendOutput('pr-number', String(prNumber));
+}
+
+// ---------------------------------------------------------------------------
 // GitHub Actions output helper
 // ---------------------------------------------------------------------------
 
@@ -331,7 +406,23 @@ switch (command) {
       process.exit(1);
     }
     break;
+  case 'task':
+    if (rest[0] === 'start') {
+      cmdTaskStart(parseArgs(rest.slice(1))).catch((err) => {
+        console.error('task start failed:', err.message ?? err);
+        process.exit(1);
+      });
+    } else if (rest[0] === 'wait') {
+      cmdTaskWait(parseArgs(rest.slice(1))).catch((err) => {
+        console.error('task wait failed:', err.message ?? err);
+        process.exit(1);
+      });
+    } else {
+      console.error('Usage: task start|wait');
+      process.exit(1);
+    }
+    break;
   default:
-    console.error('Usage: pipeline-cli <trigger|extract|find-pr|checkpoint> [options]');
+    console.error('Usage: pipeline-cli <trigger|extract|find-pr|checkpoint|task> [options]');
     process.exit(1);
 }

@@ -1,0 +1,100 @@
+# Tests the Agent Tasks API (v2026-03-10) — the proper REST API for
+# starting Copilot cloud agent tasks.
+#
+# Flow:
+#   1. task start  → POST /agents/repos/{owner}/{repo}/tasks → get task ID
+#   2. task wait   → poll GET .../tasks/{task_id} until completed
+#   3. extract     → read PR from task artifacts
+#   4. verify
+
+name: AOML Tasks API (Test)
+
+on:
+    workflow_dispatch:
+
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    tasks-api-test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install & build
+              run: pnpm install --frozen-lockfile && pnpm -r run build
+
+            - name: Start agent task
+              id: start
+              env:
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+              run: |
+                  node packages/agent/dist/pipeline-cli.js task start \
+                    --prompt "Create a README.md for an AOML Tasks API test. Include a brief description and a note that this was created via the Agent Tasks API." \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    --base "main" \
+                    > /tmp/task-start-output.json
+                  cat /tmp/task-start-output.json
+
+            - name: Wait for task completion
+              id: wait
+              env:
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+              run: |
+                  TASK_ID=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/task-start-output.json','utf8')).id)")
+                  echo "Task ID: $TASK_ID"
+                  node packages/agent/dist/pipeline-cli.js task wait \
+                    --task-id "$TASK_ID" \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    --timeout 300 \
+                    --interval 15 \
+                    > /tmp/task-wait-output.json
+                  cat /tmp/task-wait-output.json
+
+            - name: Extract PR result
+              id: extract
+              env:
+                  GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+              run: |
+                  PR_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/task-wait-output.json','utf8')).prNumber))")
+                  echo "PR number: $PR_NUMBER"
+                  if [ "$PR_NUMBER" = "null" ]; then
+                    echo "No PR created by task — checking state"
+                    STATE=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/task-wait-output.json','utf8')).state)")
+                    echo "Task state: $STATE"
+                    exit 1
+                  fi
+                  node packages/agent/dist/pipeline-cli.js extract \
+                    --pr "$PR_NUMBER" \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    > /tmp/extract-output.json
+                  cat /tmp/extract-output.json
+
+            - name: Verify
+              run: |
+                  STATE=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/task-wait-output.json','utf8')).state)")
+                  PR_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/task-wait-output.json','utf8')).prNumber))")
+                  echo "Task state: $STATE"
+                  echo "PR: #$PR_NUMBER"
+                  if [ "$STATE" != "completed" ]; then
+                    echo "ERROR: Task did not complete (state: $STATE)"
+                    exit 1
+                  fi
+                  if [ "$PR_NUMBER" = "null" ]; then
+                    echo "ERROR: No PR artifact"
+                    exit 1
+                  fi
+                  STATUS=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/extract-output.json','utf8')).status)")
+                  echo "Extract status: $STATUS"
+                  echo "Tasks API test passed"

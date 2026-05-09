@@ -255,3 +255,140 @@ async function verifyAgentStarted(
     }
   }
 }
+
+// ===========================================================================
+// Agent Tasks API (v2026-03-10)
+// https://docs.github.com/en/rest/agent-tasks/agent-tasks
+// ===========================================================================
+
+export interface TaskStartOptions {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  prompt: string;
+  baseRef?: string;
+  model?: string;
+  createPullRequest?: boolean;
+}
+
+export interface AgentTask {
+  id: string;
+  url: string;
+  htmlUrl: string;
+  name: string;
+  state: 'queued' | 'in_progress' | 'completed' | 'failed' | 'idle' | 'waiting_for_user' | 'timed_out' | 'cancelled';
+  sessionCount: number;
+  artifacts: Array<{ provider: string; type: string; data: { id: number } }>;
+  createdAt: string;
+  updatedAt: string;
+  sessions?: Array<{
+    id: string;
+    state: string;
+    prompt: string;
+    headRef: string;
+    baseRef: string;
+    model: string;
+    completedAt?: string;
+  }>;
+}
+
+const TASKS_API_VERSION = '2026-03-10';
+
+function toAgentTask(raw: any): AgentTask {
+  return {
+    id: raw.id,
+    url: raw.url,
+    htmlUrl: raw.html_url,
+    name: raw.name,
+    state: raw.state,
+    sessionCount: raw.session_count,
+    artifacts: raw.artifacts ?? [],
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    sessions: raw.sessions?.map((s: any) => ({
+      id: s.id,
+      state: s.state,
+      prompt: s.prompt,
+      headRef: s.head_ref,
+      baseRef: s.base_ref,
+      model: s.model,
+      completedAt: s.completed_at,
+    })),
+  };
+}
+
+/**
+ * Start a Copilot cloud agent task via the Agent Tasks API.
+ * POST /agents/repos/{owner}/{repo}/tasks
+ */
+export async function startAgentTask(options: TaskStartOptions): Promise<AgentTask> {
+  const { octokit, owner, repo, prompt, baseRef, model, createPullRequest } = options;
+
+  const body: Record<string, unknown> = { prompt };
+  if (baseRef) body.base_ref = baseRef;
+  if (model) body.model = model;
+  if (createPullRequest !== undefined) body.create_pull_request = createPullRequest;
+
+  const { data } = await octokit.request('POST /agents/repos/{owner}/{repo}/tasks', {
+    owner,
+    repo,
+    ...body,
+    headers: { 'X-GitHub-Api-Version': TASKS_API_VERSION },
+  });
+
+  return toAgentTask(data);
+}
+
+/**
+ * Get a task by ID via the Agent Tasks API.
+ * GET /agents/repos/{owner}/{repo}/tasks/{task_id}
+ */
+export async function getAgentTask(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  taskId: string
+): Promise<AgentTask> {
+  const { data } = await octokit.request('GET /agents/repos/{owner}/{repo}/tasks/{task_id}', {
+    owner,
+    repo,
+    task_id: taskId,
+    headers: { 'X-GitHub-Api-Version': TASKS_API_VERSION },
+  });
+
+  return toAgentTask(data);
+}
+
+/**
+ * Poll a task until it reaches a terminal state.
+ * Returns the final task state with artifacts (including PR ID).
+ */
+export async function waitForAgentTask(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  taskId: string,
+  options?: { timeoutSec?: number; intervalSec?: number }
+): Promise<AgentTask> {
+  const timeoutMs = (options?.timeoutSec ?? 300) * 1000;
+  const intervalMs = (options?.intervalSec ?? 15) * 1000;
+  const startTime = Date.now();
+
+  const terminalStates = new Set(['completed', 'failed', 'timed_out', 'cancelled']);
+
+  while (true) {
+    const task = await getAgentTask(octokit, owner, repo, taskId);
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+
+    if (terminalStates.has(task.state)) {
+      return task;
+    }
+
+    if (Date.now() - startTime >= timeoutMs) {
+      throw new Error(`Timeout after ${Math.round(timeoutMs / 1000)}s waiting for task ${taskId} (state: ${task.state})`);
+    }
+
+    console.error(`[${elapsed}s] Task ${taskId} state: ${task.state}...`);
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
