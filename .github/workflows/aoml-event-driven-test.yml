@@ -1,0 +1,58 @@
+# Testable version of the event-driven workflow for agent-ci.
+# agent-ci doesn't simulate workflow_dispatch, so this uses `push` trigger
+# and `run:` steps (calling our built code directly) instead of `uses:`.
+
+name: AOML Event-Driven (Test)
+
+on:
+    push:
+        branches: [ main ]
+
+permissions:
+    contents: write
+    issues: write
+    pull-requests: write
+
+jobs:
+    aoml-event-driven-test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build packages
+              run: pnpm -r run build
+
+            - name: Run startStep (event-driven)
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  node -e "
+                    import { startStep } from './packages/action/dist/index.js';
+                    const result = await startStep({
+                      workflowFile: 'test-cloud/workflow.xml',
+                      variables: { ticket_id: 'AGENT-CI-TEST: Create README' },
+                      githubToken: process.env.GITHUB_TOKEN,
+                      workspacePath: process.cwd(),
+                      owner: 'gilnimer',
+                      repoName: 'adlc',
+                    });
+                    console.log(JSON.stringify(result, null, 2));
+                    if (!result.done) {
+                      console.log('Checkpoint saved — next step would be triggered by PR event');
+                    }
+                  " --input-type=module
+
+            - name: Verify checkpoint
+              run: |
+                  echo "=== Checkpoint ==="
+                  cat .aoml-state/checkpoint.json 2>/dev/null || echo "No checkpoint (startStep returned done=true)"

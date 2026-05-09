@@ -1,0 +1,237 @@
+# Actions-native AOML pipeline — no XML, no engine.
+#
+# The workflow YAML IS the process definition. Each step directly calls
+# our modules (trigger agent, extract result, save checkpoint).
+#
+# Flow:
+#   1. workflow_dispatch → "start" job: trigger developer agent → save checkpoint → exit
+#   2. pull_request.review_requested → "continue" job: verify agent done → extract PR → trigger next → exit
+#   3. Repeats until all steps complete
+#
+# Pipeline steps are defined in the `env` block as a simple JSON array.
+
+name: AOML Pipeline
+
+on:
+    workflow_dispatch:
+        inputs:
+            ticket:
+                description: "Ticket / task description"
+                required: true
+                default: "Create a README.md for the project"
+
+    pull_request:
+        types: [ review_requested ]
+
+permissions:
+    contents: write
+    issues: write
+    pull-requests: write
+
+env:
+    # Pipeline definition — ordered list of steps with agent + prompt
+    PIPELINE: |
+        [
+          {
+            "id": "develop",
+            "agent": "developer",
+            "prompt": "Implement the following task:\n\n$TICKET\n\nWrite clean, well-tested code. Create or modify files as needed."
+          },
+          {
+            "id": "review",
+            "agent": "developer",
+            "prompt": "Review the code changes from the previous step. Check for:\n- Code quality and best practices\n- Missing error handling\n- Security issues\n\nFix any issues you find. Previous result:\n\n$PREV_RESULT"
+          }
+        ]
+
+jobs:
+    # ---------------------------------------------------------------
+    # START — triggered manually, kicks off the first pipeline step
+    # ---------------------------------------------------------------
+    start:
+        if: github.event_name == 'workflow_dispatch'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install & build
+              run: pnpm install --frozen-lockfile && pnpm -r run build
+
+            - name: Trigger first step
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  STEP=$(echo '${{ env.PIPELINE }}' | jq -r '.[0]')
+                  STEP_ID=$(echo "$STEP" | jq -r '.id')
+                  AGENT=$(echo "$STEP" | jq -r '.agent')
+                  PROMPT=$(echo "$STEP" | jq -r '.prompt' | sed "s|\$TICKET|${{ github.event.inputs.ticket }}|g")
+
+                  node packages/agent/dist/pipeline-cli.js trigger \
+                    --step "$STEP_ID" \
+                    --agent "$AGENT" \
+                    --prompt "$PROMPT" \
+                    --owner "${{ github.repository_owner }}" \
+                    --repo "${{ github.event.repository.name }}" \
+                    --base "${{ github.ref_name }}" \
+                    --verify-delay 15 \
+                    > /tmp/trigger-output.json
+                  cat /tmp/trigger-output.json
+
+            - name: Save checkpoint
+              run: |
+                  STEP_ID=$(echo '${{ env.PIPELINE }}' | jq -r '.[0].id')
+                  ISSUE_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/trigger-output.json','utf8')).issueNumber))")
+
+                  node packages/agent/dist/pipeline-cli.js checkpoint save \
+                    --step "$STEP_ID" \
+                    --issue "$ISSUE_NUMBER" \
+                    --base "${{ github.ref_name }}" \
+                    --variables '{"ticket": "${{ github.event.inputs.ticket }}"}'
+
+            - name: Commit checkpoint
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add .aoml-state/
+                  git commit -m "[aoml] pipeline started — step: $(echo '${{ env.PIPELINE }}' | jq -r '.[0].id')" || true
+                  git push
+
+    # ---------------------------------------------------------------
+    # CONTINUE — triggered by PR event, advances the pipeline
+    # ---------------------------------------------------------------
+    continue:
+        if: github.event_name == 'pull_request' && github.event.action ==
+            'review_requested'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install & build
+              run: pnpm install --frozen-lockfile && pnpm -r run build
+
+            - name: Load checkpoint
+              id: checkpoint
+              run: |
+                  if [ ! -f .aoml-state/pipeline.json ]; then
+                    echo "No active pipeline — skipping"
+                    echo "active=false" >> $GITHUB_OUTPUT
+                    exit 0
+                  fi
+                  echo "active=true" >> $GITHUB_OUTPUT
+                  node packages/agent/dist/pipeline-cli.js checkpoint load
+
+            - name: Verify agent completed
+              if: steps.checkpoint.outputs.active == 'true'
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  node packages/agent/dist/pipeline-cli.js find-pr \
+                    --issue "${{ steps.checkpoint.outputs.issue-number }}" \
+                    --owner "${{ github.repository_owner }}" \
+                    --repo "${{ github.event.repository.name }}" \
+                    --timeout 60 \
+                    --interval 10 \
+                    > /tmp/find-pr-output.json
+                  cat /tmp/find-pr-output.json
+
+            - name: Extract PR result
+              if: steps.checkpoint.outputs.active == 'true'
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  node packages/agent/dist/pipeline-cli.js extract \
+                    --pr "${{ github.event.pull_request.number }}" \
+                    --owner "${{ github.repository_owner }}" \
+                    --repo "${{ github.event.repository.name }}" \
+                    > /tmp/extract-output.json
+                  cat /tmp/extract-output.json
+
+            - name: Trigger next step
+              if: steps.checkpoint.outputs.active == 'true'
+              id: next
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  CURRENT="${{ steps.checkpoint.outputs.current-step }}"
+                  PIPELINE='${{ env.PIPELINE }}'
+
+                  # Find current step index
+                  IDX=$(echo "$PIPELINE" | jq --arg id "$CURRENT" 'to_entries | .[] | select(.value.id == $id) | .key')
+                  NEXT_IDX=$((IDX + 1))
+                  TOTAL=$(echo "$PIPELINE" | jq 'length')
+
+                  if [ "$NEXT_IDX" -ge "$TOTAL" ]; then
+                    echo "Pipeline complete! All $TOTAL steps finished."
+                    echo "done=true" >> $GITHUB_OUTPUT
+                    exit 0
+                  fi
+
+                  STEP=$(echo "$PIPELINE" | jq -r ".[$NEXT_IDX]")
+                  STEP_ID=$(echo "$STEP" | jq -r '.id')
+                  AGENT=$(echo "$STEP" | jq -r '.agent')
+                  PREV_RESULT=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/extract-output.json','utf8')).extractedData.slice(0,2000))")
+                  PROMPT=$(echo "$STEP" | jq -r '.prompt' | sed "s|\$PREV_RESULT|${PREV_RESULT}|g")
+
+                  echo "Triggering next step: $STEP_ID (agent: $AGENT)"
+
+                  # Use the PR's head branch as base for next step
+                  BASE_BRANCH="${{ github.event.pull_request.head.ref }}"
+
+                  node packages/agent/dist/pipeline-cli.js trigger \
+                    --step "$STEP_ID" \
+                    --agent "$AGENT" \
+                    --prompt "$PROMPT" \
+                    --owner "${{ github.repository_owner }}" \
+                    --repo "${{ github.event.repository.name }}" \
+                    --base "$BASE_BRANCH" \
+                    --verify-delay 15 \
+                    > /tmp/next-trigger-output.json
+                  cat /tmp/next-trigger-output.json
+
+                  # Update checkpoint with issue number from the trigger we just ran
+                  NEXT_ISSUE=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/next-trigger-output.json','utf8')).issueNumber))")
+                  COMPLETED='${{ steps.checkpoint.outputs.completed-steps }}'
+                  NEW_COMPLETED=$(echo "$COMPLETED" | jq \
+                    --arg sid "$CURRENT" \
+                    --argjson pr "${{ github.event.pull_request.number }}" \
+                    --arg res "$(echo "$PREV_RESULT" | head -c 500)" \
+                    '. + [{"stepId": $sid, "prNumber": $pr, "result": $res}]')
+
+                  node packages/agent/dist/pipeline-cli.js checkpoint save \
+                    --step "$STEP_ID" \
+                    --issue "$NEXT_ISSUE" \
+                    --base "$BASE_BRANCH" \
+                    --completed "$NEW_COMPLETED"
+
+                  echo "done=false" >> $GITHUB_OUTPUT
+
+            - name: Commit checkpoint
+              if: steps.checkpoint.outputs.active == 'true' && steps.next.outputs.done !=
+                  'true'
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add .aoml-state/
+                  git commit -m "[aoml] pipeline continued — step: ${{ steps.checkpoint.outputs.current-step }} done" || true
+                  git push
+
+            - name: Pipeline complete
+              if: steps.next.outputs.done == 'true'
+              run: |
+                  echo "## Pipeline Complete! 🎉" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "All steps finished successfully." >> $GITHUB_STEP_SUMMARY

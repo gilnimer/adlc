@@ -27,13 +27,6 @@ function createMockOctokit(overrides?: {
 
   return {
     issues: {
-      create: vi.fn().mockResolvedValue({
-        data: {
-          number: 42,
-          html_url: 'https://github.com/test-owner/test-repo/issues/42',
-        },
-      }),
-      addAssignees: vi.fn().mockResolvedValue({}),
       get: vi.fn().mockImplementation(() => ({
         data: {
           state: opts.closedWithoutPR ? 'closed' : 'open',
@@ -95,7 +88,14 @@ function createMockOctokit(overrides?: {
         data: opts.files,
       }),
     },
-    request: vi.fn().mockResolvedValue({}),
+    // The executor now uses a single octokit.request('POST /repos/...') call
+    // that creates the issue with assignees + agent_assignment in one shot.
+    request: vi.fn().mockResolvedValue({
+      data: {
+        number: 42,
+        html_url: 'https://github.com/test-owner/test-repo/issues/42',
+      },
+    }),
   };
 }
 
@@ -125,18 +125,20 @@ describe('CloudAgentExecutor', () => {
 
     const result = await executor(makeStep(), 'Implement auth', new Map());
 
-    expect(octokit.issues.create).toHaveBeenCalledWith(
+    // Single request() call creates issue with assignees + agent_assignment
+    expect(octokit.request).toHaveBeenCalledWith(
+      'POST /repos/{owner}/{repo}/issues',
       expect.objectContaining({
         owner: 'test-owner',
         repo: 'test-repo',
         title: expect.stringContaining('step-auth'),
         labels: ['aoml-orchestration'],
-      })
-    );
-
-    expect(octokit.issues.addAssignees).toHaveBeenCalledWith(
-      expect.objectContaining({
         assignees: ['copilot-swe-agent[bot]'],
+        agent_assignment: expect.objectContaining({
+          target_repo: 'test-owner/test-repo',
+          base_branch: 'main',
+          custom_agent: 'developer',
+        }),
       })
     );
 
@@ -198,14 +200,15 @@ describe('CloudAgentExecutor', () => {
     // Step 2 should use step-1's PR branch as base
     await executor(makeStep({ id: 'step-2' }), 'Step 2', new Map());
 
-    // The second PATCH call should reference the PR branch from step 1
-    const patchCalls = octokit.request.mock.calls;
-    expect(patchCalls.length).toBe(2);
+    // Both steps use octokit.request() to create issues
+    const requestCalls = octokit.request.mock.calls;
+    // Each step makes 1 request (create issue), so 2 total
+    expect(requestCalls.length).toBe(2);
 
     // First call uses baseBranch "main"
-    expect((patchCalls[0][1] as any).agent_assignment.base_branch).toBe('main');
+    expect((requestCalls[0][1] as any).agent_assignment.base_branch).toBe('main');
     // Second call uses the PR branch from step 1
-    expect((patchCalls[1][1] as any).agent_assignment.base_branch).toBe('copilot/step-auth');
+    expect((requestCalls[1][1] as any).agent_assignment.base_branch).toBe('copilot/step-auth');
   });
 
   it('passes variables in issue body', async () => {
@@ -225,7 +228,7 @@ describe('CloudAgentExecutor', () => {
 
     await executor(makeStep(), 'Implement auth', vars);
 
-    const createCall = octokit.issues.create.mock.calls[0][0];
+    const createCall = octokit.request.mock.calls[0][1] as any;
     expect(createCall.body).toContain('file_path');
     expect(createCall.body).toContain('src/auth.ts');
     expect(createCall.body).toContain('priority');
@@ -248,5 +251,39 @@ describe('CloudAgentExecutor', () => {
     expect(octokit.pulls.list).toHaveBeenCalled();
     expect(result.status).toBe('success');
     expect(result.extractedData).toContain('PR #100');
+  });
+
+  it('forwards model from modelResolver to agent_assignment', async () => {
+    const octokit = createMockOctokit();
+
+    const executor = createCloudAgentExecutor({
+      octokit: octokit as any,
+      owner: 'test-owner',
+      repo: 'test-repo',
+      pollIntervalMs: 10,
+      modelResolver: (agentName) => (agentName === 'developer' ? 'gpt-4o' : undefined),
+    });
+
+    await executor(makeStep({ agent: 'developer' }), 'Implement auth', new Map());
+
+    const requestCall = octokit.request.mock.calls[0][1] as any;
+    expect(requestCall.agent_assignment.model).toBe('gpt-4o');
+  });
+
+  it('uses empty model when modelResolver returns undefined', async () => {
+    const octokit = createMockOctokit();
+
+    const executor = createCloudAgentExecutor({
+      octokit: octokit as any,
+      owner: 'test-owner',
+      repo: 'test-repo',
+      pollIntervalMs: 10,
+      modelResolver: () => undefined,
+    });
+
+    await executor(makeStep({ agent: 'unknown-agent' }), 'Do something', new Map());
+
+    const requestCall = octokit.request.mock.calls[0][1] as any;
+    expect(requestCall.agent_assignment.model).toBe('');
   });
 });

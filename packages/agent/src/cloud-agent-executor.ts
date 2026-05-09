@@ -3,10 +3,9 @@
  * cloud agent sessions for each AOML step.
  *
  * For each step the engine yields:
- * 1. Create a GitHub issue via REST API
- * 2. Assign it to `copilot-swe-agent[bot]` with custom_agent + custom_instructions
- * 3. Poll for session completion (PR created and review requested)
- * 4. Parse the result (PR diff / body) and return a structured AdapterResponse
+ * 1. Create a GitHub issue with `assignees` + `agent_assignment` in a single REST call
+ * 2. Poll for session completion (PR created and review requested)
+ * 3. Parse the result (PR diff / body) and return a structured AdapterResponse
  *
  * This keeps the AOML engine 100% deterministic — it controls the flow,
  * gateways, loops, and routing. Each step is an "island" of agentic work
@@ -35,6 +34,12 @@ export interface CloudAgentConfig {
   timeoutMs?: number;
   /** Optional callback for progress updates */
   onProgress?: (stepId: string, message: string) => void;
+  /**
+   * Optional resolver that maps an agent name to its preferred model.
+   * When provided, the model from the agent's .agent.md config is forwarded
+   * to the cloud agent via `agent_assignment.model`.
+   */
+  modelResolver?: (agentName: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,57 +75,47 @@ export function createCloudAgentExecutor(config: CloudAgentConfig): StepExecutor
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     onProgress,
+    modelResolver,
   } = config;
 
   // Track the branch from the last step so work can be chained
   let lastBranch = baseBranch;
 
-  return async (step: Step, prompt: string, variables: Map<string, unknown>): Promise<AdapterResponse> => {
+  return async (
+    step: Step,
+    prompt: string,
+    variables: Map<string, unknown>
+  ): Promise<AdapterResponse> => {
     const agentName = step.agent ?? 'copilot';
 
-    // 1. Create issue with the step's prompt as instructions
+    // 1. Create issue and assign to Copilot cloud agent in a single call.
+    //    Per GitHub docs: POST /repos/{owner}/{repo}/issues supports both
+    //    `assignees` and `agent_assignment` fields directly.
+    //    See: https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/start-copilot-sessions#using-the-rest-api
     onProgress?.(step.id, `Creating issue for step "${step.id}" → agent "${agentName}"...`);
 
     const issueTitle = `[AOML] Step: ${step.id} — agent: ${agentName}`;
     const issueBody = formatIssueBody(step, prompt, variables);
 
-    const { data: issue } = await octokit.issues.create({
+    const { data: issue } = await octokit.request('POST /repos/{owner}/{repo}/issues', {
       owner,
       repo,
       title: issueTitle,
       body: issueBody,
       labels: ['aoml-orchestration'],
-    });
-
-    onProgress?.(step.id, `Issue #${issue.number} created. Assigning to cloud agent...`);
-
-    // 2. Assign to copilot-swe-agent[bot] with custom agent + instructions
-    await octokit.issues.addAssignees({
-      owner,
-      repo,
-      issue_number: issue.number,
       assignees: ['copilot-swe-agent[bot]'],
-    });
-
-    // Set agent assignment metadata via PATCH
-    await octokit.request('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
-      owner,
-      repo,
-      issue_number: issue.number,
-      assignees: ['copilot-swe-agent[bot]'],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       agent_assignment: {
         target_repo: `${owner}/${repo}`,
         base_branch: lastBranch,
         custom_instructions: prompt,
-        custom_agent: agentName,
-        model: '',
+        custom_agent: agentName !== 'copilot' ? agentName : '',
+        model: modelResolver?.(agentName) ?? '',
       },
-    } as any);
+    });
 
-    onProgress?.(step.id, `Cloud agent session started. Polling for completion...`);
+    onProgress?.(step.id, `Issue #${issue.number} created and assigned. Polling for completion...`);
 
-    // 3. Poll for completion — watch for a PR linked to this issue
+    // 2. Poll for completion — watch for a PR linked to this issue
     const session = await pollForCompletion({
       octokit,
       owner,
@@ -131,7 +126,7 @@ export function createCloudAgentExecutor(config: CloudAgentConfig): StepExecutor
       onProgress: (msg) => onProgress?.(step.id, msg),
     });
 
-    // 4. Parse the result
+    // 3. Parse the result
     if (session.status === 'failed') {
       return {
         status: 'fail',
@@ -165,11 +160,7 @@ export function createCloudAgentExecutor(config: CloudAgentConfig): StepExecutor
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatIssueBody(
-  step: Step,
-  prompt: string,
-  variables: Map<string, unknown>
-): string {
+function formatIssueBody(step: Step, prompt: string, variables: Map<string, unknown>): string {
   const varsSection =
     variables.size > 0
       ? `### Variables\n\n${[...variables.entries()].map(([k, v]) => `- **${k}**: ${String(v)}`).join('\n')}\n\n`
@@ -255,8 +246,7 @@ async function pollForCompletion(options: PollOptions): Promise<SessionInfo> {
         // Find the PR whose body mentions this issue or was created by the bot
         for (const pr of prs) {
           const mentionsIssue =
-            pr.body?.includes(`#${issueNumber}`) ||
-            pr.body?.includes(`issues/${issueNumber}`);
+            pr.body?.includes(`#${issueNumber}`) || pr.body?.includes(`issues/${issueNumber}`);
           const byBot = pr.user?.type === 'Bot';
 
           if (mentionsIssue || byBot) {
@@ -305,7 +295,9 @@ async function pollForCompletion(options: PollOptions): Promise<SessionInfo> {
       return session;
     }
 
-    onProgress?.(`Still waiting... (PR: ${session.prNumber ? `#${session.prNumber}` : 'not yet created'})`);
+    onProgress?.(
+      `Still waiting... (PR: ${session.prNumber ? `#${session.prNumber}` : 'not yet created'})`
+    );
     await delay(pollIntervalMs);
   }
 
@@ -335,7 +327,9 @@ async function extractResultFromPR(options: {
     pull_number: prNumber,
   });
 
-  const changedFiles = files.map((f) => `${f.status}: ${f.filename} (+${f.additions}/-${f.deletions})`);
+  const changedFiles = files.map(
+    (f) => `${f.status}: ${f.filename} (+${f.additions}/-${f.deletions})`
+  );
 
   return [
     `PR #${prNumber}: ${pr.title}`,

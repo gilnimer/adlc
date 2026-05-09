@@ -1,22 +1,24 @@
 <process name="Cloud-Agent-Smoke-Test" type="workflow">
-  <trigger type="manual" />
+    <trigger type="manual" />
 
-  <globals>
-    <var name="ticket_id" required="true" />
-  </globals>
+    <globals>
+        <var name="ticket_id" required="true" />
+    </globals>
 
-  <steps>
-    <step id="create-readme" agent="developer">
-      <input format="text">Create a README.md file for a project called "AOML Test". Include a brief description that this is a smoke test for the AOML orchestration engine. Ticket: ${{ticket_id}}</input>
-      <output save_as="readme_result" />
-      <routing>
-        <on-status value="success" goto="done" />
-        <on-error goto="done" />
-      </routing>
-    </step>
+    <steps>
+        <step id="create-readme" agent="developer">
+            <input format="text">Create a README.md file for a project called "AOML Test". Include a
+                brief description that this is a smoke test for the AOML orchestration engine.
+                Ticket: ${{ticket_id}}</input>
+            <output save_as="readme_result" />
+            <routing>
+                <on-status value="success" goto="done" />
+                <on-error goto="done" />
+            </routing>
+        </step>
 
-    <step id="done" agent="system" prompt="noop">
-      <input format="text">Workflow complete. Result: ${{readme_result}}</input>
-    </step>
-  </steps>
+        <step id="done" agent="system" prompt="noop">
+            <input format="text">Workflow complete. Result: ${{readme_result}}</input>
+        </step>
+    </steps>
 </process>

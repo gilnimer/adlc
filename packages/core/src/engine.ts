@@ -42,6 +42,57 @@ export interface EngineOptions {
   variables?: Record<string, unknown>;
   stepExecutor: StepExecutor;
   subFlowLoader?: SubFlowLoader;
+  /** Restore engine from a previously serialized checkpoint (resumes mid-workflow). */
+  restoreState?: SerializedEngineState;
+}
+
+// ---------------------------------------------------------------------------
+// State serialization — JSON-safe representation of EngineState
+// ---------------------------------------------------------------------------
+
+/** JSON-safe version of EngineState (Maps converted to plain objects). */
+export interface SerializedEngineState {
+  processName: string;
+  currentStepId: string;
+  variables: Record<string, unknown>;
+  callStack: SerializedCallStackFrame[];
+  executionTrace: TraceEntry[];
+}
+
+export interface SerializedCallStackFrame {
+  parentProcessName: string;
+  returnStepId: string;
+  variableContext: Record<string, unknown>;
+}
+
+/** Convert EngineState to a JSON-safe object. */
+export function serializeState(state: EngineState): SerializedEngineState {
+  return {
+    processName: state.processName,
+    currentStepId: state.currentStepId,
+    variables: Object.fromEntries(state.variables),
+    callStack: state.callStack.map((frame) => ({
+      parentProcessName: frame.parentProcessName,
+      returnStepId: frame.returnStepId,
+      variableContext: Object.fromEntries(frame.variableContext),
+    })),
+    executionTrace: state.executionTrace,
+  };
+}
+
+/** Restore EngineState from a JSON-safe object. */
+export function deserializeState(serialized: SerializedEngineState): EngineState {
+  return {
+    processName: serialized.processName,
+    currentStepId: serialized.currentStepId,
+    variables: new Map(Object.entries(serialized.variables)),
+    callStack: serialized.callStack.map((frame) => ({
+      parentProcessName: frame.parentProcessName,
+      returnStepId: frame.returnStepId,
+      variableContext: new Map(Object.entries(frame.variableContext)),
+    })),
+    executionTrace: serialized.executionTrace,
+  };
 }
 
 export class Engine {
@@ -63,20 +114,25 @@ export class Engine {
       this.stepMap.set(step.id, step);
     }
 
-    const initialVars = new Map<string, unknown>();
-    if (options.variables) {
-      for (const [key, value] of Object.entries(options.variables)) {
-        initialVars.set(key, value);
+    if (options.restoreState) {
+      // Resume from a serialized checkpoint
+      this.state = deserializeState(options.restoreState);
+    } else {
+      const initialVars = new Map<string, unknown>();
+      if (options.variables) {
+        for (const [key, value] of Object.entries(options.variables)) {
+          initialVars.set(key, value);
+        }
       }
-    }
 
-    this.state = {
-      processName: this.process.name,
-      currentStepId: this.process.steps[0].id,
-      variables: initialVars,
-      callStack: [],
-      executionTrace: [],
-    };
+      this.state = {
+        processName: this.process.name,
+        currentStepId: this.process.steps[0].id,
+        variables: initialVars,
+        callStack: [],
+        executionTrace: [],
+      };
+    }
   }
 
   getState(): EngineState {
@@ -88,7 +144,11 @@ export class Engine {
     // This keeps all existing consumers (tests, action, copilot) working unchanged.
     for await (const request of this.steps()) {
       try {
-        const result = await this.stepExecutor(request.step, request.prompt, new Map(request.variables));
+        const result = await this.stepExecutor(
+          request.step,
+          request.prompt,
+          new Map(request.variables)
+        );
         this.receiveResult(request, {
           rawOutput: result.extractedData,
           response: result,
@@ -97,7 +157,10 @@ export class Engine {
         // Feed error back so the generator can do error routing
         this.receiveResult(request, {
           rawOutput: error instanceof Error ? error.message : String(error),
-          response: { status: '_error', extractedData: error instanceof Error ? error.message : String(error) },
+          response: {
+            status: '_error',
+            extractedData: error instanceof Error ? error.message : String(error),
+          },
           error,
         });
       }
@@ -201,7 +264,8 @@ export class Engine {
     };
   }
 
-  private _pendingResult: { response: AdapterResponse; error?: unknown; startTime: number } | null = null;
+  private _pendingResult: { response: AdapterResponse; error?: unknown; startTime: number } | null =
+    null;
 
   private recordSuccess(step: Step, result: AdapterResponse, latencyMs: number): void {
     const traceEntry: TraceEntry = {

@@ -1,0 +1,140 @@
+# agent-ci testable version of the pipeline — uses push trigger.
+# Tests the full pipeline flow:
+#   Job 1 (pipeline-start): install → build → trigger agent → checkpoint
+#   Job 2 (pipeline-continue): load checkpoint → extract PR → verify continue path
+
+name: AOML Pipeline (Test)
+
+on:
+    push:
+        branches: [ main ]
+
+permissions:
+    contents: write
+    issues: write
+    pull-requests: write
+
+jobs:
+    pipeline-start:
+        runs-on: ubuntu-latest
+        outputs:
+            issue-number: ${{ steps.save.outputs.issue-number }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install & build
+              run: pnpm install --frozen-lockfile && pnpm -r run build
+
+            - name: Trigger developer agent
+              id: trigger
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  node packages/agent/dist/pipeline-cli.js trigger \
+                    --step "develop" \
+                    --agent "developer" \
+                    --prompt "Create a README.md for an AOML Pipeline test project. Include a brief description." \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    --base "main" \
+                    --verify-delay 15 \
+                    > /tmp/trigger-output.json
+                  cat /tmp/trigger-output.json
+
+            - name: Save checkpoint
+              id: save
+              run: |
+                  ISSUE_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/trigger-output.json','utf8')).issueNumber))")
+                  echo "Issue number: $ISSUE_NUMBER"
+                  echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
+                  node packages/agent/dist/pipeline-cli.js checkpoint save \
+                    --step "develop" \
+                    --issue "$ISSUE_NUMBER" \
+                    --base "main" \
+                    --variables '{"ticket": "Pipeline test"}'
+
+            - name: Verify checkpoint
+              run: |
+                  echo "=== Checkpoint ==="
+                  node packages/agent/dist/pipeline-cli.js checkpoint load
+                  echo ""
+                  echo "=== Raw file ==="
+                  cat .aoml-state/pipeline.json
+
+    # ---------------------------------------------------------------
+    # CONTINUE — simulates the event-driven resume path
+    # Waits for the cloud agent to create a PR from the triggered issue,
+    # then extracts the result (mirrors the production continue job).
+    # ---------------------------------------------------------------
+    pipeline-continue:
+        runs-on: ubuntu-latest
+        needs: pipeline-start
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install pnpm
+              run: corepack enable && corepack prepare pnpm@latest --activate
+
+            - name: Install & build
+              run: pnpm install --frozen-lockfile && pnpm -r run build
+
+            - name: Simulate checkpoint from start job
+              run: |
+                  node packages/agent/dist/pipeline-cli.js checkpoint save \
+                    --step "develop" \
+                    --issue "${{ needs.pipeline-start.outputs.issue-number }}" \
+                    --base "main" \
+                    --variables '{"ticket": "Pipeline test"}'
+                  echo "=== Loaded checkpoint ==="
+                  node packages/agent/dist/pipeline-cli.js checkpoint load
+
+            - name: Wait for agent PR
+              id: find-pr
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  node packages/agent/dist/pipeline-cli.js find-pr \
+                    --issue "${{ needs.pipeline-start.outputs.issue-number }}" \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    --timeout 300 \
+                    --interval 30 \
+                    > /tmp/find-pr-output.json
+                  cat /tmp/find-pr-output.json
+
+            - name: Extract PR result
+              id: extract
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  PR_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/find-pr-output.json','utf8')).prNumber))")
+                  echo "PR number: $PR_NUMBER"
+                  node packages/agent/dist/pipeline-cli.js extract \
+                    --pr "$PR_NUMBER" \
+                    --owner "gilnimer" \
+                    --repo "adlc" \
+                    > /tmp/extract-output.json
+                  cat /tmp/extract-output.json
+
+            - name: Verify extraction
+              run: |
+                  PR_NUMBER=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/find-pr-output.json','utf8')).prNumber))")
+                  STATUS=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/tmp/extract-output.json','utf8')).status)")
+                  echo "PR: #$PR_NUMBER"
+                  echo "Status: $STATUS"
+                  if [ -z "$STATUS" ]; then
+                    echo "ERROR: No status from extract"
+                    exit 1
+                  fi
+                  echo "Continue path verified successfully"

@@ -22,7 +22,18 @@ export { ProcessSchema, AdapterResponseSchema, StepSchema, RoutingSchema } from 
 export { parseAoml, AomlParseError } from './parser.js';
 export { parseAomlFile } from './file-parser.js';
 export { interpolate, extractVariableNames, VariableResolutionError } from './variables.js';
-export { Engine, type StepExecutor, type SubFlowLoader, type EngineOptions, type StepRequest, type StepResult } from './engine.js';
+export {
+  Engine,
+  type StepExecutor,
+  type SubFlowLoader,
+  type EngineOptions,
+  type StepRequest,
+  type StepResult,
+  serializeState,
+  deserializeState,
+  type SerializedEngineState,
+  type SerializedCallStackFrame,
+} from './engine.js';
 export { EngineEventEmitter, type EngineEvents } from './events.js';
 export {
   parseAgentFile,

@@ -3,7 +3,8 @@ description: 'Run AOML workflows in GitHub Actions'
 inputs:
   workflow-file:
     description: 'Path to the AOML workflow XML file'
-    required: true
+    required: false
+    default: ''
   variables:
     description: 'JSON object of global variables'
     required: false
@@ -13,9 +14,18 @@ inputs:
     required: false
     default: ${{ github.token }}
   execution-mode:
-    description: 'Execution mode: "local" (LLM calls via Copilot SDK) or "cloud-agent" (triggers Copilot cloud agent sessions per step)'
+    description: >
+      Execution mode:
+        "local" — LLM calls via Copilot SDK (default)
+        "cloud-agent" — triggers + polls cloud agent per step
+        "event-driven" — trigger first step, save state, exit (no polling)
+        "event-driven-continue" — resume from checkpoint after PR event
     required: false
     default: 'local'
+  pr-number:
+    description: 'PR number that completed (required for event-driven-continue)'
+    required: false
+    default: ''
 outputs:
   status:
     description: 'Overall execution status'
@@ -23,6 +33,10 @@ outputs:
     description: 'Full JSON execution trace'
   summary:
     description: 'Markdown execution summary'
+  step-id:
+    description: 'The step that was triggered (event-driven modes)'
+  done:
+    description: 'Whether the workflow is complete (event-driven modes)'
 runs:
   using: 'node20'
   main: 'dist/index.js'

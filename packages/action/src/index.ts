@@ -1,15 +1,24 @@
 import { resolve, dirname } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import {
   parseAomlFile,
   Engine,
   createAdapterExecutor,
   AgentRegistry,
+  serializeState,
   type SubFlowLoader,
   type EngineState,
   type LLMClient,
   type LLMCallOptions,
+  type SerializedEngineState,
 } from '@aoml/core';
-import { createCloudAgentExecutor, type CloudAgentConfig } from '@aoml/agent';
+import {
+  createCloudAgentExecutor,
+  triggerCloudAgent,
+  extractCloudAgentResult,
+  type CloudAgentConfig,
+  type TriggerOptions,
+} from '@aoml/agent';
 import { Octokit } from '@octokit/rest';
 
 /** Default LLM call timeout in ms — per TSD §9 */
@@ -155,7 +164,14 @@ async function runCloudAction(inputs: ActionInputs): Promise<ActionOutputs> {
 
   const [owner, repoName] = resolveRepo(inputs);
 
-  const octokit = new Octokit({ auth: inputs.githubToken });
+  const octokit = new Octokit({
+    auth: inputs.githubToken,
+    headers: { 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+
+  // Load agent configs so the cloud executor can forward the model setting
+  const agentsDir = resolve(workspacePath, '.github', 'agents');
+  const registry = new AgentRegistry(agentsDir);
 
   const executor = createCloudAgentExecutor({
     octokit,
@@ -164,6 +180,13 @@ async function runCloudAction(inputs: ActionInputs): Promise<ActionOutputs> {
     baseBranch: process.env.GITHUB_REF_NAME ?? 'main',
     onProgress: (stepId, message) => {
       console.log(`[${stepId}] ${message}`);
+    },
+    modelResolver: (agentName) => {
+      try {
+        return registry.resolve(agentName).model;
+      } catch {
+        return undefined;
+      }
     },
   });
 
@@ -187,7 +210,19 @@ async function runCloudAction(inputs: ActionInputs): Promise<ActionOutputs> {
   for await (const request of engine.steps()) {
     const stepIndex = engine.getState().executionTrace.length + 1;
     const totalSteps = aomlProcess.steps.length;
-    console.log(`[aoml] Step ${stepIndex}/${totalSteps}: ${request.step.id} (agent: ${request.step.agent ?? 'default'})`);
+    console.log(
+      `[aoml] Step ${stepIndex}/${totalSteps}: ${request.step.id} (agent: ${request.step.agent ?? 'default'})`
+    );
+
+    // System steps are terminal — no cloud agent session needed
+    if (request.step.agent === 'system') {
+      console.log(`[aoml] Skipping cloud agent for system step "${request.step.id}"`);
+      engine.receiveResult(request, {
+        rawOutput: request.prompt,
+        response: { status: 'success', extractedData: request.prompt },
+      });
+      continue;
+    }
 
     try {
       const result = await executor(request.step, request.prompt, new Map(request.variables));
@@ -217,16 +252,13 @@ async function runCloudAction(inputs: ActionInputs): Promise<ActionOutputs> {
   };
 }
 
-function resolveRepo(inputs: ActionInputs): [string, string] {
+function resolveRepo(inputs: { owner?: string; repoName?: string }): [string, string] {
   if (inputs.owner && inputs.repoName) {
     return [inputs.owner, inputs.repoName];
   }
   const fullRepo = process.env.GITHUB_REPOSITORY ?? '';
   const [owner, repoName] = fullRepo.split('/');
-  return [
-    inputs.owner ?? owner ?? 'unknown',
-    inputs.repoName ?? repoName ?? 'unknown',
-  ];
+  return [inputs.owner ?? owner ?? 'unknown', inputs.repoName ?? repoName ?? 'unknown'];
 }
 
 /**
@@ -313,4 +345,267 @@ export function formatActionSummary(state: EngineState): string {
 function getOverallStatus(state: EngineState): string {
   const lastEntry = state.executionTrace[state.executionTrace.length - 1];
   return lastEntry?.status ?? 'unknown';
+}
+
+// ---------------------------------------------------------------------------
+// Event-driven mode — one step per workflow run (no polling)
+// ---------------------------------------------------------------------------
+
+/** Persistent checkpoint written to `.aoml-state/checkpoint.json` */
+interface StepCheckpoint {
+  /** Serialized engine state (paused just before the current step) */
+  engineState: SerializedEngineState;
+  /** Issue number created for the current in-flight step */
+  issueNumber: number;
+  /** Step id that is in-flight */
+  stepId: string;
+  /** Branch the agent is working from */
+  baseBranch: string;
+  /** The original workflow file path */
+  workflowFile: string;
+  /** Original input variables */
+  variables: Record<string, string>;
+}
+
+const CHECKPOINT_DIR = '.aoml-state';
+const CHECKPOINT_FILE = 'checkpoint.json';
+
+function checkpointPath(workspacePath: string): string {
+  return resolve(workspacePath, CHECKPOINT_DIR, CHECKPOINT_FILE);
+}
+
+function saveCheckpoint(workspacePath: string, checkpoint: StepCheckpoint): void {
+  const dir = resolve(workspacePath, CHECKPOINT_DIR);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(checkpointPath(workspacePath), JSON.stringify(checkpoint, null, 2));
+}
+
+function loadCheckpoint(workspacePath: string): StepCheckpoint | null {
+  const path = checkpointPath(workspacePath);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, 'utf-8'));
+}
+
+export interface EventDrivenInputs {
+  workflowFile: string;
+  variables: Record<string, string>;
+  githubToken: string;
+  workspacePath?: string;
+  owner?: string;
+  repoName?: string;
+  /** For `continue`: the PR number that just completed */
+  prNumber?: number;
+}
+
+/**
+ * Start the AOML workflow: advance the engine to the first non-system step,
+ * trigger the cloud agent, save state, and exit. No polling.
+ */
+export async function startStep(inputs: EventDrivenInputs): Promise<{
+  issueNumber: number;
+  stepId: string;
+  done: boolean;
+}> {
+  const workspacePath = inputs.workspacePath ?? process.cwd();
+  const fullPath = resolve(workspacePath, inputs.workflowFile);
+  const aomlProcess = parseAomlFile(fullPath);
+  const [owner, repoName] = resolveRepo(inputs);
+
+  const octokit = new Octokit({
+    auth: inputs.githubToken,
+    headers: { 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+
+  const agentsDir = resolve(workspacePath, '.github', 'agents');
+  const registry = new AgentRegistry(agentsDir);
+
+  const noopExecutor: import('@aoml/core').StepExecutor = () => {
+    throw new Error('unreachable');
+  };
+
+  const engine = new Engine({
+    process: aomlProcess,
+    variables: inputs.variables,
+    stepExecutor: noopExecutor,
+  });
+
+  // Advance through system steps until we hit one that needs the cloud agent
+  for await (const request of engine.steps()) {
+    if (request.step.agent === 'system') {
+      engine.receiveResult(request, {
+        rawOutput: request.prompt,
+        response: { status: 'success', extractedData: request.prompt },
+      });
+      continue;
+    }
+
+    // Found a real step — trigger cloud agent and save checkpoint
+    const baseBranch = process.env.GITHUB_REF_NAME ?? 'main';
+    const triggerOpts: TriggerOptions = {
+      octokit,
+      owner,
+      repo: repoName,
+      baseBranch,
+      modelResolver: (agentName) => {
+        try {
+          return registry.resolve(agentName).model;
+        } catch {
+          return undefined;
+        }
+      },
+    };
+
+    const { issueNumber } = await triggerCloudAgent(
+      request.step,
+      request.prompt,
+      new Map(request.variables),
+      triggerOpts
+    );
+
+    console.log(`[aoml] Triggered step "${request.step.id}" → issue #${issueNumber}`);
+
+    // Save checkpoint so the next workflow run can resume
+    saveCheckpoint(workspacePath, {
+      engineState: serializeState(engine.getState()),
+      issueNumber,
+      stepId: request.step.id,
+      baseBranch,
+      workflowFile: inputs.workflowFile,
+      variables: inputs.variables,
+    });
+
+    return { issueNumber, stepId: request.step.id, done: false };
+  }
+
+  // No non-system steps — workflow is done
+  return { issueNumber: 0, stepId: '', done: true };
+}
+
+/**
+ * Continue the AOML workflow after a cloud agent step completed.
+ * Reads the PR result, feeds it back to the engine, advances to the next step,
+ * triggers the next cloud agent (if any), saves state, and exits.
+ */
+export async function continueStep(inputs: EventDrivenInputs): Promise<{
+  issueNumber: number;
+  stepId: string;
+  done: boolean;
+  summary?: string;
+}> {
+  const workspacePath = inputs.workspacePath ?? process.cwd();
+  const checkpoint = loadCheckpoint(workspacePath);
+  if (!checkpoint) {
+    throw new Error('No checkpoint found — run startStep first');
+  }
+
+  const fullPath = resolve(workspacePath, checkpoint.workflowFile);
+  const aomlProcess = parseAomlFile(fullPath);
+  const [owner, repoName] = resolveRepo(inputs);
+
+  const octokit = new Octokit({
+    auth: inputs.githubToken,
+    headers: { 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+
+  const agentsDir = resolve(workspacePath, '.github', 'agents');
+  const registry = new AgentRegistry(agentsDir);
+
+  if (!inputs.prNumber) {
+    throw new Error('continueStep requires prNumber (the PR that just completed)');
+  }
+
+  // Extract result from the completed PR
+  const result = await extractCloudAgentResult({
+    octokit,
+    owner,
+    repo: repoName,
+    prNumber: inputs.prNumber,
+  });
+
+  // Get the branch from the completed PR for chaining
+  const { data: pr } = await octokit.pulls.get({
+    owner,
+    repo: repoName,
+    pull_number: inputs.prNumber,
+  });
+  const nextBaseBranch = pr.head.ref;
+
+  console.log(`[aoml] Step "${checkpoint.stepId}" completed via PR #${inputs.prNumber}`);
+
+  // Restore engine from checkpoint
+  const noopExecutor: import('@aoml/core').StepExecutor = () => {
+    throw new Error('unreachable');
+  };
+
+  const engine = new Engine({
+    process: aomlProcess,
+    variables: checkpoint.variables,
+    stepExecutor: noopExecutor,
+    restoreState: checkpoint.engineState,
+  });
+
+  // Feed the result back and advance
+  let fed = false;
+  for await (const request of engine.steps()) {
+    if (!fed) {
+      // This is the step we were waiting on — feed the result
+      engine.receiveResult(request, {
+        rawOutput: result.extractedData,
+        response: result,
+      });
+      fed = true;
+      continue;
+    }
+
+    // Skip system steps
+    if (request.step.agent === 'system') {
+      engine.receiveResult(request, {
+        rawOutput: request.prompt,
+        response: { status: 'success', extractedData: request.prompt },
+      });
+      continue;
+    }
+
+    // Found the next real step — trigger and checkpoint
+    const triggerOpts: TriggerOptions = {
+      octokit,
+      owner,
+      repo: repoName,
+      baseBranch: nextBaseBranch,
+      modelResolver: (agentName) => {
+        try {
+          return registry.resolve(agentName).model;
+        } catch {
+          return undefined;
+        }
+      },
+    };
+
+    const { issueNumber } = await triggerCloudAgent(
+      request.step,
+      request.prompt,
+      new Map(request.variables),
+      triggerOpts
+    );
+
+    console.log(`[aoml] Triggered next step "${request.step.id}" → issue #${issueNumber}`);
+
+    saveCheckpoint(workspacePath, {
+      engineState: serializeState(engine.getState()),
+      issueNumber,
+      stepId: request.step.id,
+      baseBranch: nextBaseBranch,
+      workflowFile: checkpoint.workflowFile,
+      variables: checkpoint.variables,
+    });
+
+    return { issueNumber, stepId: request.step.id, done: false };
+  }
+
+  // No more steps — workflow complete
+  const finalState = engine.getState();
+  const summary = formatActionSummary(finalState);
+  console.log(`[aoml] Workflow complete!\n${summary}`);
+
+  return { issueNumber: 0, stepId: '', done: true, summary };
 }
