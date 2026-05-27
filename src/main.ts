@@ -1,24 +1,48 @@
-import neo4j from "neo4j-driver";
+import "dotenv/config";
+import express from "express";
+import path from "path";
+import { initSchema, closeDriver } from "./db/neo4j";
+import { router } from "./api/routes";
+import { viewRouter } from "./api/views";
 
-const URI = "bolt://localhost:7687";
-const USER = "neo4j";
-const PASSWORD = "secretgraph";
+const PORT = process.env.PORT || 3000;
 
-// Create driver instance
-const driver = neo4j.driver(URI, neo4j.auth.basic(USER, PASSWORD));
+async function main() {
+  // Initialize Neo4j schema
+  await initSchema();
 
-async function runQuery() {
-  const session = driver.session();
-  try {
-    // Run a Cypher query
-    const result = await session.run("RETURN $text AS message", {
-      text: "Hello, Neo4j!",
-    });
-    const singleRecord = result.records[0];
-    console.log(singleRecord.get("message"));
-  } finally {
-    await session.close();
-  }
+  const app = express();
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+
+  // Static frontend
+  app.use(express.static(path.join(__dirname, "../public")));
+
+  // API routes
+  app.use("/api", router);
+
+  // HTMX view routes
+  app.use("/views", viewRouter);
+
+  // Health check
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  const server = app.listen(PORT, () => {
+    console.log(`Product Intent Graph API running on http://localhost:${PORT}`);
+  });
+
+  // Graceful shutdown
+  process.on("SIGINT", async () => {
+    console.log("\nShutting down...");
+    server.close();
+    await closeDriver();
+    process.exit(0);
+  });
 }
 
-runQuery().catch(console.error);
+main().catch((err) => {
+  console.error("Failed to start:", err);
+  process.exit(1);
+});

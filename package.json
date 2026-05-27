@@ -21,10 +21,16 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "neo4j-driver": "^6.0.1"
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "neo4j-driver": "^6.0.1",
+    "openai": "^6.39.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
+    "@types/uuid": "^10.0.0",
     "typescript": "^6.0.3"
   }
 }

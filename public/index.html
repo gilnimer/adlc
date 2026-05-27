@@ -1,0 +1,1147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Intent Graph</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root,
+      [data-theme="dark"] {
+        --bg-base: #09090b;
+        --bg-elevated: #18181b;
+        --bg-surface: #1c1c22;
+        --bg-hover: #27272a;
+        --border: #27272a;
+        --border-subtle: #1f1f23;
+        --text-primary: #fafafa;
+        --text-secondary: #a1a1aa;
+        --text-muted: #71717a;
+        --accent: #6366f1;
+        --accent-hover: #818cf8;
+        --accent-muted: rgba(99, 102, 241, 0.12);
+        --success: #10b981;
+        --success-muted: rgba(16, 185, 129, 0.12);
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --radius: 8px;
+        --radius-lg: 12px;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+        --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
+        --transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      [data-theme="light"] {
+        --bg-base: #ffffff;
+        --bg-elevated: #f9fafb;
+        --bg-surface: #f3f4f6;
+        --bg-hover: #e5e7eb;
+        --border: #e5e7eb;
+        --border-subtle: #f3f4f6;
+        --text-primary: #111827;
+        --text-secondary: #4b5563;
+        --text-muted: #9ca3af;
+        --accent: #4f46e5;
+        --accent-hover: #6366f1;
+        --accent-muted: rgba(79, 70, 229, 0.08);
+        --success: #059669;
+        --success-muted: rgba(5, 150, 105, 0.08);
+        --warning: #d97706;
+        --danger: #dc2626;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+        --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--bg-base);
+        color: var(--text-primary);
+        font-size: 14px;
+        line-height: 1.5;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      /* ─── App Shell ─── */
+      .app {
+        display: grid;
+        grid-template-rows: 56px 1fr;
+        height: 100vh;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        background: var(--bg-elevated);
+        border-bottom: 1px solid var(--border);
+        z-index: 10;
+      }
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .topbar-logo {
+        width: 28px;
+        height: 28px;
+        background: linear-gradient(135deg, var(--accent), #a855f7);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .topbar-logo svg {
+        width: 16px;
+        height: 16px;
+      }
+      .topbar-title {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .topbar-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .theme-toggle {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all var(--transition);
+      }
+      .theme-toggle:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+        border-color: var(--accent);
+      }
+      .theme-toggle svg {
+        width: 18px;
+        height: 18px;
+      }
+      [data-theme="light"] .theme-toggle .icon-moon {
+        display: none;
+      }
+      [data-theme="dark"] .theme-toggle .icon-sun {
+        display: none;
+      }
+      :root .theme-toggle .icon-sun {
+        display: none;
+      }
+      .topbar-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--success);
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        overflow: hidden;
+      }
+
+      /* ─── Sidebar ─── */
+      .sidebar {
+        background: var(--bg-elevated);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .sidebar-header {
+        padding: 16px 16px 12px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .sidebar-header h2 {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+      }
+      .sidebar-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px;
+      }
+      .sidebar-body::-webkit-scrollbar {
+        width: 4px;
+      }
+      .sidebar-body::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+      }
+
+      .intent-list {
+        list-style: none;
+      }
+      .intent-item {
+        padding: 10px 12px;
+        border-radius: var(--radius);
+        margin-bottom: 2px;
+        cursor: pointer;
+        transition:
+          background var(--transition),
+          box-shadow var(--transition);
+        border: 1px solid transparent;
+      }
+      .intent-item:hover {
+        background: var(--bg-hover);
+      }
+      .intent-item.active {
+        background: var(--accent-muted);
+        border-color: rgba(99, 102, 241, 0.2);
+      }
+      .intent-item .name {
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 3px;
+        color: var(--text-primary);
+      }
+      .intent-item .meta {
+        font-size: 11px;
+        color: var(--text-muted);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .status-draft {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
+      }
+      .status-approved {
+        background: var(--success-muted);
+        color: var(--success);
+      }
+
+      /* ─── Main Content ─── */
+      .main {
+        overflow-y: auto;
+        padding: 24px 32px;
+      }
+      .main::-webkit-scrollbar {
+        width: 6px;
+      }
+      .main::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      /* ─── Tabs ─── */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 24px;
+        background: var(--bg-elevated);
+        padding: 4px;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        width: fit-content;
+      }
+      .tab {
+        padding: 7px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-muted);
+        border: none;
+        background: none;
+        transition: all var(--transition);
+        white-space: nowrap;
+      }
+      .tab:hover {
+        color: var(--text-secondary);
+      }
+      .tab.active {
+        color: var(--text-primary);
+        background: var(--bg-hover);
+        box-shadow: var(--shadow);
+      }
+
+      /* ─── Cards ─── */
+      .card {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 24px;
+        margin-bottom: 16px;
+        box-shadow: var(--shadow);
+      }
+      .card h2 {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 0;
+      }
+      .card h3 {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        margin-bottom: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .card-row {
+        display: flex;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-subtle);
+        align-items: baseline;
+      }
+      .card-row:last-child {
+        border-bottom: none;
+      }
+      .card-label {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-weight: 500;
+        min-width: 100px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+      }
+      .card-value {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      /* ─── Chain Visualization ─── */
+      .chain {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 20px 0;
+        gap: 4px;
+      }
+      .chain-node {
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid;
+        text-align: center;
+        transition:
+          transform var(--transition),
+          box-shadow var(--transition);
+      }
+      .chain-node:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-lg);
+      }
+      .chain-arrow {
+        color: var(--text-muted);
+        font-size: 14px;
+        padding: 0 6px;
+      }
+      .chain-node.Segment {
+        border-color: rgba(249, 115, 22, 0.4);
+        background: rgba(249, 115, 22, 0.08);
+        color: #fb923c;
+      }
+      .chain-node.Need {
+        border-color: rgba(234, 179, 8, 0.4);
+        background: rgba(234, 179, 8, 0.08);
+        color: #fbbf24;
+      }
+      .chain-node.Capability {
+        border-color: rgba(99, 102, 241, 0.4);
+        background: rgba(99, 102, 241, 0.08);
+        color: #818cf8;
+      }
+      .chain-node.JourneyStep {
+        border-color: rgba(168, 85, 247, 0.4);
+        background: rgba(168, 85, 247, 0.08);
+        color: #c084fc;
+      }
+      .chain-node.Outcome {
+        border-color: rgba(16, 185, 129, 0.4);
+        background: rgba(16, 185, 129, 0.08);
+        color: #34d399;
+      }
+      .chain-node.Metric {
+        border-color: rgba(236, 72, 153, 0.4);
+        background: rgba(236, 72, 153, 0.08);
+        color: #f472b6;
+      }
+      .chain-node.Constraint {
+        border-color: rgba(239, 68, 68, 0.4);
+        background: rgba(239, 68, 68, 0.08);
+        color: #f87171;
+      }
+      .chain-node.Assumption {
+        border-color: rgba(113, 113, 122, 0.4);
+        background: rgba(113, 113, 122, 0.08);
+        color: #a1a1aa;
+      }
+
+      /* ─── Matrix Table ─── */
+      .matrix-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+      }
+      .matrix-table th {
+        text-align: left;
+        padding: 10px 16px;
+        background: var(--bg-surface);
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border-bottom: 1px solid var(--border);
+      }
+      .matrix-table th:first-child {
+        border-radius: var(--radius) 0 0 0;
+      }
+      .matrix-table th:last-child {
+        border-radius: 0 var(--radius) 0 0;
+      }
+      .matrix-table td {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+      }
+      .matrix-table tr:hover td {
+        background: var(--bg-hover);
+      }
+      .priority-high {
+        color: #f87171;
+        font-weight: 500;
+      }
+      .priority-medium {
+        color: #fbbf24;
+        font-weight: 500;
+      }
+      .priority-low {
+        color: var(--text-muted);
+      }
+      .cond-status {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .cond-draft {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
+      }
+      .cond-verified {
+        background: var(--success-muted);
+        color: var(--success);
+      }
+      .cond-ready {
+        background: var(--accent-muted);
+        color: var(--accent-hover);
+      }
+
+      /* ─── Work Packages ─── */
+      .wp-section {
+        margin-bottom: 16px;
+      }
+      .wp-role {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 12px;
+      }
+      .wp-role-engineering {
+        background: rgba(99, 102, 241, 0.12);
+        color: #818cf8;
+      }
+      .wp-role-qa {
+        background: var(--success-muted);
+        color: var(--success);
+      }
+      .wp-role-design {
+        background: rgba(168, 85, 247, 0.12);
+        color: #c084fc;
+      }
+      .wp-role-data {
+        background: rgba(245, 158, 11, 0.12);
+        color: #fbbf24;
+      }
+      .wp-items {
+        list-style: none;
+        padding-left: 16px;
+      }
+      .wp-items li {
+        font-size: 13px;
+        padding: 6px 0;
+        border-left: 2px solid var(--border);
+        padding-left: 12px;
+        margin-bottom: 2px;
+        color: var(--text-secondary);
+        transition: border-color var(--transition);
+      }
+      .wp-items li:hover {
+        border-left-color: var(--accent);
+      }
+      .wp-section-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-muted);
+        margin: 12px 0 6px 0;
+      }
+
+      /* ─── Forms ─── */
+      .query-input,
+      .parse-area {
+        width: 100%;
+        background: var(--bg-base);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px 14px;
+        color: var(--text-primary);
+        font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        font-size: 13px;
+        resize: vertical;
+        transition:
+          border-color var(--transition),
+          box-shadow var(--transition);
+      }
+      .query-input {
+        min-height: 80px;
+      }
+      .parse-area {
+        min-height: 140px;
+        font-family: "Inter", sans-serif;
+      }
+      .query-input:focus,
+      .parse-area:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-muted);
+      }
+      .btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: "Inter", sans-serif;
+        transition: all var(--transition);
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      }
+      .btn-ghost {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+      }
+      .btn-ghost:hover {
+        background: var(--bg-surface);
+        color: var(--text-primary);
+      }
+      .query-results {
+        margin-top: 16px;
+        background: var(--bg-base);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        max-height: 400px;
+        overflow: auto;
+        font-size: 12px;
+        font-family: "JetBrains Mono", "SF Mono", monospace;
+        white-space: pre-wrap;
+        color: var(--text-secondary);
+      }
+
+      /* ─── Empty State ─── */
+      .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 24px;
+        text-align: center;
+      }
+      .empty-state-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        background: var(--accent-muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+      }
+      .empty-state-icon svg {
+        width: 24px;
+        height: 24px;
+        color: var(--accent);
+      }
+      .empty-state h3 {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+      }
+      .empty-state p {
+        font-size: 13px;
+        color: var(--text-muted);
+        max-width: 300px;
+      }
+
+      /* ─── Quick Query Chips ─── */
+      .chip-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
+      }
+      .chip {
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+        cursor: pointer;
+        transition: all var(--transition);
+      }
+      .chip:hover {
+        background: var(--accent-muted);
+        border-color: rgba(99, 102, 241, 0.3);
+        color: var(--accent-hover);
+      }
+
+      /* ─── Journeys ─── */
+      .journey-card {
+        margin-bottom: 20px;
+      }
+      .journey-segment-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .journey-flow {
+        display: flex;
+        align-items: flex-start;
+        gap: 0;
+        overflow-x: auto;
+        padding: 8px 0 16px;
+      }
+      .journey-lane {
+        min-width: 140px;
+        flex-shrink: 0;
+      }
+      .journey-lane-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+      }
+      .journey-lane-items {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .journey-node {
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid;
+      }
+      .journey-node.need {
+        border-color: rgba(234, 179, 8, 0.3);
+        background: rgba(234, 179, 8, 0.06);
+        color: #fbbf24;
+      }
+      .journey-node.capability {
+        border-color: rgba(99, 102, 241, 0.3);
+        background: rgba(99, 102, 241, 0.06);
+        color: #818cf8;
+      }
+      .journey-node.step {
+        border-color: rgba(168, 85, 247, 0.3);
+        background: rgba(168, 85, 247, 0.06);
+        color: #c084fc;
+      }
+      .journey-node.outcome {
+        border-color: rgba(16, 185, 129, 0.3);
+        background: rgba(16, 185, 129, 0.06);
+        color: #34d399;
+      }
+      .journey-connector {
+        display: flex;
+        align-items: center;
+        padding: 0 8px;
+        color: var(--text-muted);
+        flex-shrink: 0;
+        margin-top: 28px;
+      }
+      .journey-metrics {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-subtle);
+        margin-top: 12px;
+      }
+      .journey-metric {
+        padding: 3px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        background: rgba(236, 72, 153, 0.08);
+        border: 1px solid rgba(236, 72, 153, 0.2);
+        color: #f472b6;
+      }
+      .journey-intents {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
+      }
+      .journey-intent-tag {
+        padding: 3px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: var(--accent-muted);
+        color: var(--accent-hover);
+        font-weight: 500;
+      }
+
+      /* ─── HTMX States ─── */
+      .htmx-indicator {
+        display: none;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .htmx-request .htmx-indicator,
+      .htmx-request.htmx-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-brand">
+          <div class="topbar-logo">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M12 2v4m0 12v4m-7.07-15.07 2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83"
+              />
+            </svg>
+          </div>
+          <span class="topbar-title">Intent Graph</span>
+        </div>
+        <div class="topbar-meta">
+          <span><span class="topbar-dot"></span></span>
+          <span>Connected</span>
+          <button
+            class="theme-toggle"
+            onclick="toggleTheme()"
+            title="Toggle theme"
+          >
+            <svg
+              class="icon-sun"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="5" />
+              <path
+                d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+              />
+            </svg>
+            <svg
+              class="icon-moon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Layout -->
+      <div class="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h2>Intents</h2>
+          </div>
+          <div class="sidebar-body">
+            <ul
+              class="intent-list"
+              id="intent-list"
+              hx-get="/views/intents"
+              hx-trigger="load"
+              hx-swap="innerHTML"
+            ></ul>
+          </div>
+        </aside>
+
+        <!-- Main -->
+        <main class="main">
+          <div class="tabs">
+            <button
+              class="tab active"
+              data-tab="card"
+              onclick="switchTab(this, 'card')"
+            >
+              Overview
+            </button>
+            <button
+              class="tab"
+              data-tab="chain"
+              onclick="switchTab(this, 'chain')"
+            >
+              Chain
+            </button>
+            <button
+              class="tab"
+              data-tab="matrix"
+              onclick="switchTab(this, 'matrix')"
+            >
+              Conditions
+            </button>
+            <button
+              class="tab"
+              data-tab="packages"
+              onclick="switchTab(this, 'packages')"
+            >
+              Packages
+            </button>
+            <button
+              class="tab"
+              data-tab="journeys"
+              onclick="switchTab(this, 'journeys')"
+            >
+              Journeys
+            </button>
+            <button
+              class="tab"
+              data-tab="query"
+              onclick="switchTab(this, 'query')"
+            >
+              Query
+            </button>
+            <button
+              class="tab"
+              data-tab="parse"
+              onclick="switchTab(this, 'parse')"
+            >
+              Parse
+            </button>
+          </div>
+
+          <!-- Tab content -->
+          <div id="main-content">
+            <div class="empty-state">
+              <div class="empty-state-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M12 2v4m0 12v4m-7.07-15.07 2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83"
+                  />
+                </svg>
+              </div>
+              <h3>Select an intent</h3>
+              <p>
+                Choose an intent from the sidebar to explore its graph
+                structure, conditions, and work packages.
+              </p>
+            </div>
+          </div>
+
+          <!-- Journeys panel -->
+          <div
+            id="panel-journeys"
+            style="display: none"
+            hx-get="/views/journeys"
+            hx-trigger="intersect once"
+            hx-swap="innerHTML"
+          ></div>
+
+          <!-- Query panel -->
+          <div id="panel-query" style="display: none">
+            <div class="card">
+              <h3>Cypher Query</h3>
+              <form
+                hx-post="/views/query"
+                hx-target="#query-results"
+                hx-swap="innerHTML"
+              >
+                <textarea
+                  class="query-input"
+                  name="cypher"
+                  placeholder="MATCH (n:GraphNode) RETURN n.type, n.name LIMIT 20"
+                >
+MATCH (n:GraphNode)-[r:GRAPH_EDGE]->(m:GraphNode) RETURN n.name AS from, r.type AS rel, m.name AS to LIMIT 30</textarea
+                >
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    margin-top: 12px;
+                  "
+                >
+                  <button class="btn btn-primary" type="submit">Execute</button>
+                  <span class="htmx-indicator"
+                    ><span class="spinner"></span> Running...</span
+                  >
+                </div>
+              </form>
+              <div class="query-results" id="query-results"></div>
+            </div>
+            <div class="card">
+              <h3>Quick Queries</h3>
+              <div class="chip-grid">
+                <button
+                  class="chip"
+                  hx-post="/views/query"
+                  hx-target="#query-results"
+                  hx-vals='{"cypher":"MATCH (c:AcceptanceCondition) RETURN c.intentId AS intent, c.description AS condition, c.priority AS priority, c.status AS status ORDER BY c.priority"}'
+                >
+                  All Conditions
+                </button>
+                <button
+                  class="chip"
+                  hx-post="/views/query"
+                  hx-target="#query-results"
+                  hx-vals='{"cypher":"MATCH (c:AcceptanceCondition) WHERE c.status <> \"verified\" RETURN c.intentId AS intent, c.description AS condition, c.status AS status"}'
+                >
+                  Unverified
+                </button>
+                <button
+                  class="chip"
+                  hx-post="/views/query"
+                  hx-target="#query-results"
+                  hx-vals='{"cypher":"MATCH (n:GraphNode {type: \"Segment\"}) RETURN DISTINCT n.name AS segment"}'
+                >
+                  Segments
+                </button>
+                <button
+                  class="chip"
+                  hx-post="/views/query"
+                  hx-target="#query-results"
+                  hx-vals='{"cypher":"MATCH (n:GraphNode {type: \"Capability\"}) RETURN n.name AS capability, n.intentId AS intent"}'
+                >
+                  Capabilities
+                </button>
+                <button
+                  class="chip"
+                  hx-post="/views/query"
+                  hx-target="#query-results"
+                  hx-vals='{"cypher":"MATCH (i1:Intent)-[:CONTAINS]->(n:GraphNode)<-[:CONTAINS]-(i2:Intent) WHERE i1.id < i2.id RETURN n.name AS shared_node, n.type AS type, i1.name AS intent1, i2.name AS intent2"}'
+                >
+                  Cross-Intent
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Parse panel -->
+          <div id="panel-parse" style="display: none">
+            <div class="card">
+              <h3>Parse User Story / PRD</h3>
+              <textarea
+                class="parse-area"
+                name="sourceText"
+                id="parse-input"
+                placeholder="As a [role], I want [capability], so that [outcome]&#10;&#10;Or paste full PRD text to extract structured intents..."
+              ></textarea>
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  margin-top: 12px;
+                "
+              >
+                <button
+                  class="btn btn-primary"
+                  hx-post="/views/parse"
+                  hx-target="#parse-result"
+                  hx-swap="innerHTML"
+                  hx-include="#parse-input"
+                  hx-vals='{"mode":"basic"}'
+                >
+                  Parse (Rules)
+                </button>
+                <button
+                  class="btn btn-ghost"
+                  hx-post="/views/parse"
+                  hx-target="#parse-result"
+                  hx-swap="innerHTML"
+                  hx-include="#parse-input"
+                  hx-vals='{"mode":"llm"}'
+                >
+                  Parse (LLM)
+                </button>
+                <span class="htmx-indicator"
+                  ><span class="spinner"></span> Parsing...</span
+                >
+              </div>
+              <div id="parse-result" style="margin-top: 16px"></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      // Theme
+      (function () {
+        const saved = localStorage.getItem("theme") || "dark";
+        document.documentElement.setAttribute("data-theme", saved);
+      })();
+
+      function toggleTheme() {
+        const current =
+          document.documentElement.getAttribute("data-theme") || "dark";
+        const next = current === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("theme", next);
+      }
+
+      window.__activeIntent = null;
+
+      function switchTab(el, tab) {
+        document
+          .querySelectorAll(".tab")
+          .forEach((t) => t.classList.remove("active"));
+        el.classList.add("active");
+
+        document.getElementById("main-content").style.display = "none";
+        document.getElementById("panel-query").style.display = "none";
+        document.getElementById("panel-parse").style.display = "none";
+        document.getElementById("panel-journeys").style.display = "none";
+
+        if (tab === "query") {
+          document.getElementById("panel-query").style.display = "block";
+          return;
+        }
+        if (tab === "parse") {
+          document.getElementById("panel-parse").style.display = "block";
+          return;
+        }
+        if (tab === "journeys") {
+          var jp = document.getElementById("panel-journeys");
+          jp.style.display = "block";
+          htmx.ajax("GET", "/views/journeys", {
+            target: "#panel-journeys",
+            swap: "innerHTML",
+          });
+          return;
+        }
+
+        document.getElementById("main-content").style.display = "block";
+        if (!window.__activeIntent) return;
+        htmx.ajax(
+          "GET",
+          "/views/intents/" + window.__activeIntent + "/" + tab,
+          { target: "#main-content", swap: "innerHTML" },
+        );
+      }
+    </script>
+  </body>
+</html>
